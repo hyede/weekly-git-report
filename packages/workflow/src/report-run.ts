@@ -93,10 +93,38 @@ export async function prepareReportRun(input: PrepareReportRunInput): Promise<Pr
     run = await waitForCollectionSlot(store, run);
     const config = await loadConfig();
     const projectsIndex = await loadProjectsIndex();
-    const projects = selectProjects(
-      projectsIndex.projects.filter((project) => project.enabled),
-      input.projectIds ?? input.task?.projectIds ?? [],
-    );
+    let projects: typeof projectsIndex.projects;
+    const skippedTaskProjects: string[] = [];
+    if (input.task?.projectIds.length) {
+      const requested = new Set(input.task.projectIds);
+      const configured = projectsIndex.projects.filter((project) => requested.has(project.id));
+      const enabledIds = new Set(
+        configured.filter((project) => project.enabled).map((project) => project.id),
+      );
+      skippedTaskProjects.push(
+        ...input.task.projectIds.filter((projectId) => !enabledIds.has(projectId)),
+      );
+      projects = configured.filter((project) => project.enabled);
+      if (projects.length === 0) {
+        throw new Error(
+          `任务所选仓库均已停用或不存在，无法生成报告：${skippedTaskProjects.join(", ")}`,
+        );
+      }
+    } else {
+      projects = selectProjects(
+        projectsIndex.projects.filter((project) => project.enabled),
+        input.projectIds ?? input.task?.projectIds ?? [],
+      );
+    }
+    if (skippedTaskProjects.length > 0) {
+      run = store.replace({
+        ...run,
+        warnings: skippedTaskProjects.map(
+          (projectId) => `任务所选仓库已停用或不存在，本次已跳过：${projectId}`,
+        ),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     const syncResult = await syncRepositories(projects);
     const collectResult = await collectCommits({
       projects: syncResult.projects,
@@ -107,7 +135,13 @@ export async function prepareReportRun(input: PrepareReportRunInput): Promise<Pr
     if (store.require(run.id).status === "cancelled") {
       throw new RunOperationError("RUN_CANCELLED", "Report run was cancelled.", "collect");
     }
-    collectResult.errors.unshift(...syncResult.errors);
+    collectResult.errors.unshift(
+      ...skippedTaskProjects.map((projectId) => ({
+        projectId,
+        message: `任务所选仓库已停用或不存在，本次已跳过：${projectId}`,
+      })),
+      ...syncResult.errors,
+    );
     const report = await writeReport({
       config,
       period,

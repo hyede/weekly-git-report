@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { CalendarDays, Eye, Loader2, RotateCcw, Save, Sparkles } from 'lucide-react'
 import type { DateRange } from 'react-day-picker'
-import type { ReportRun, ReportType } from '@weekly-git-report/shared'
+import type { ReportRun, ReportType, RepositoryProject } from '@weekly-git-report/shared'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { MarkdownViewer } from '@/components/markdown-viewer'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -28,8 +28,10 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { getErrorMessage } from '@/lib/errors'
+import { desktopQueryKeys } from '@/lib/desktop-queries'
 import { showErrorToast, showSuccessToast, showWarningToast } from '@/lib/toast'
 import type { ReportFile } from '../../../shared/ipc'
+import { useQuery } from '@tanstack/react-query'
 
 export function ReportGenerationPanel({
   initialReport,
@@ -67,6 +69,7 @@ export function ReportGenerationPanel({
   const [run, setRun] = useState<ReportRun>()
   const [runId, setRunId] = useState<string | undefined>(initialRunId)
   const [publish, setPublish] = useState(false)
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | undefined>()
   const [forceSave, setForceSave] = useState(false)
   const [templatePreviewOpen, setTemplatePreviewOpen] = useState(false)
   const [confirmRegenerateOpen, setConfirmRegenerateOpen] = useState(false)
@@ -81,7 +84,20 @@ export function ReportGenerationPanel({
         ? toPeriod(customRange)
         : onboarding
           ? onboardingPeriod(reportType)
-          : currentPeriod(reportType)
+        : currentPeriod(reportType)
+  const projects = useQuery({
+    queryKey: desktopQueryKeys.projectsState,
+    queryFn: () => window.electronAPI.projects.state(),
+    enabled: !onboarding,
+  })
+  const enabledProjects = (projects.data?.projects ?? []).filter((project) => project.enabled)
+  const effectiveProjectIds =
+    selectedProjectIds ?? enabledProjects.map((project) => project.id)
+  const canGenerate =
+    onboarding ||
+    (projects.isSuccess &&
+      enabledProjects.length > 0 &&
+      effectiveProjectIds.some((id) => enabledProjects.some((project) => project.id === id)))
 
   useEffect(() => {
     runIdRef.current = runId
@@ -147,6 +163,7 @@ export function ReportGenerationPanel({
         ...(reportType === 'custom' ? { templateType } : {}),
         period: period!,
         ...(regenerating && initialReport?.reportId ? { reportId: initialReport.reportId } : {}),
+        ...(!onboarding ? { projectIds: effectiveProjectIds } : {}),
         ...(reportType === 'custom' && title.trim() ? { title: title.trim() } : {}),
         ...(context.trim() ? { userContext: context.trim() } : {}),
       }),
@@ -405,6 +422,43 @@ export function ReportGenerationPanel({
         ) : null}
         {!onboarding ? (
           <div className='space-y-2'>
+            <div className='flex items-center justify-between'>
+              <Label>参与报告的仓库</Label>
+              <span className='text-xs text-muted-foreground'>
+                已选 {effectiveProjectIds.length} / {enabledProjects.length}
+              </span>
+            </div>
+            {projects.isLoading ? (
+              <p className='text-sm text-muted-foreground'>正在读取启用的仓库…</p>
+            ) : enabledProjects.length ? (
+              <div className='max-h-32 space-y-1 overflow-y-auto rounded-md border p-2'>
+                {enabledProjects.map((project) => (
+                  <RepositoryCheckbox
+                    key={project.id}
+                    project={project}
+                    checked={effectiveProjectIds.includes(project.id)}
+                    disabled={generating}
+                    onCheckedChange={(checked) =>
+                      setSelectedProjectIds((current) => {
+                        const selected = new Set(current ?? enabledProjects.map((item) => item.id))
+                        if (checked) selected.add(project.id)
+                        else selected.delete(project.id)
+                        return [...selected]
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className='text-sm text-destructive'>没有已启用的仓库，请先到仓库设置中启用仓库。</p>
+            )}
+            {!projects.isLoading && enabledProjects.length > 0 && !canGenerate ? (
+              <p className='text-xs text-destructive'>至少选择一个已启用的仓库。</p>
+            ) : null}
+          </div>
+        ) : null}
+        {!onboarding ? (
+          <div className='space-y-2'>
             <Label>报告模板</Label>
             <div className='flex gap-2'>
               {reportType === 'custom' ? (
@@ -526,7 +580,7 @@ export function ReportGenerationPanel({
               <Button
                 variant='outline'
                 onClick={() => generate.mutate()}
-                disabled={busy || !period}
+                disabled={busy || !period || !canGenerate}
               >
                 <Sparkles />
                 更换周期后重新采集
@@ -552,7 +606,7 @@ export function ReportGenerationPanel({
               </Button>
             </>
           ) : (
-            <Button onClick={() => generate.mutate()} disabled={busy || !period}>
+            <Button onClick={() => generate.mutate()} disabled={busy || !period || !canGenerate}>
               {generating ? <Loader2 className='animate-spin' /> : <Sparkles />}开始生成
             </Button>
           )}
@@ -608,6 +662,30 @@ const TEMPLATE_OPTIONS: Array<{ value: ReportType; label: string }> = [
 
 function getTemplateLabel(type: ReportType) {
   return TEMPLATE_OPTIONS.find((option) => option.value === type)?.label ?? '报告模板'
+}
+
+function RepositoryCheckbox({
+  project,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  project: RepositoryProject
+  checked: boolean
+  disabled: boolean
+  onCheckedChange(checked: boolean): void
+}) {
+  return (
+    <label className='flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted'>
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+      />
+      <span className='truncate'>{project.name}</span>
+      <span className='ms-auto truncate text-xs text-muted-foreground'>{project.branch}</span>
+    </label>
+  )
 }
 
 async function restoreRun(runId: string) {

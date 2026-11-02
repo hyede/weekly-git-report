@@ -7,6 +7,14 @@ import { GenerateReportDialog } from './generate-report-dialog'
 import { ReportGenerationPanel } from './report-generation-panel'
 
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }))
+const defaultProject = {
+  id: 'repo-default',
+  name: '默认仓库',
+  url: 'https://example.com/default.git',
+  branch: 'main',
+  localPath: 'C:/repos/default',
+  enabled: true,
+}
 
 vi.mock('sonner', () => ({ toast }))
 
@@ -16,6 +24,74 @@ afterEach(() => {
 })
 
 describe('GenerateReportDialog', () => {
+  it('默认选择所有启用仓库并将本次选择传给生成请求', async () => {
+    const generate = vi.fn().mockResolvedValue({ id: 'run-scoped', status: 'awaiting_review' })
+    vi.stubGlobal('electronAPI', {
+      projects: {
+        state: vi.fn().mockResolvedValue({
+          revision: 'projects-revision',
+          projects: [
+            {
+              id: 'repo-alpha',
+              name: '仓库 Alpha',
+              url: 'https://example.com/alpha.git',
+              branch: 'main',
+              localPath: 'C:/repos/alpha',
+              enabled: true,
+            },
+            {
+              id: 'repo-beta',
+              name: '仓库 Beta',
+              url: 'https://example.com/beta.git',
+              branch: 'main',
+              localPath: 'C:/repos/beta',
+              enabled: true,
+            },
+            {
+              id: 'repo-disabled',
+              name: '停用仓库',
+              url: 'https://example.com/disabled.git',
+              branch: 'main',
+              localPath: 'C:/repos/disabled',
+              enabled: false,
+            },
+          ],
+        }),
+      },
+      runs: {
+        onGenerationDelta: vi.fn(() => () => undefined),
+        generate,
+      },
+    } as unknown as DesktopAPI)
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <GenerateReportDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    const alpha = screen.getByRole('checkbox', { name: '仓库 Alpha' })
+    const beta = screen.getByRole('checkbox', { name: '仓库 Beta' })
+    await expect.element(alpha).toBeChecked()
+    await expect.element(beta).toBeChecked()
+    await expect.element(screen.getByText('停用仓库')).not.toBeInTheDocument()
+    await userEvent.click(beta)
+    await userEvent.click(alpha)
+    const generateButton = screen.getByRole('button', { name: '开始生成' })
+    await expect.element(generateButton).toBeDisabled()
+    await expect.element(screen.getByText('至少选择一个已启用的仓库。')).toBeInTheDocument()
+    expect(generate).not.toHaveBeenCalled()
+    await userEvent.click(alpha)
+    await expect.element(generateButton).not.toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
+
+    await vi.waitFor(() =>
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({ projectIds: ['repo-alpha'] }),
+      ),
+    )
+  })
+
   it('clears the completed report before the dialog is opened again', async () => {
     let onGenerationDelta: ((runId: string, delta: string) => void) | undefined
     const generate = vi.fn().mockImplementation(async () => {
@@ -26,6 +102,7 @@ describe('GenerateReportDialog', () => {
     const onOpenChange = vi.fn()
     const onSaved = vi.fn()
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn((listener) => {
           onGenerationDelta = listener
@@ -88,6 +165,7 @@ describe('GenerateReportDialog', () => {
       created: false,
     })
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       templates: { read: readTemplate },
       runs: {
         onGenerationDelta: vi.fn(() => () => undefined),
@@ -160,6 +238,7 @@ describe('GenerateReportDialog', () => {
         templateType: 'monthly',
         reportId: 'report-1',
         title: '版本回顾',
+        projectIds: ['repo-default'],
         period: { start: '2026-08-01', end: '2026-08-03' },
       }),
     )
@@ -180,6 +259,7 @@ describe('GenerateReportDialog', () => {
       created: false,
     })
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       templates: { read: readTemplate },
       runs: {
         onGenerationDelta: vi.fn(() => () => undefined),
@@ -219,6 +299,7 @@ describe('GenerateReportDialog', () => {
       return { id: 'run-empty', status: 'awaiting_review' }
     })
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn((listener) => {
           onGenerationDelta = listener
@@ -259,6 +340,7 @@ describe('GenerateReportDialog', () => {
     })
     const readDraft = vi.fn().mockResolvedValue('# 已恢复草稿')
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn(() => () => undefined),
         get,
@@ -295,6 +377,7 @@ describe('GenerateReportDialog', () => {
       return { id: 'run-1', status: 'awaiting_review' }
     })
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn((listener) => {
           onGenerationDelta = listener
@@ -337,6 +420,7 @@ describe('GenerateReportDialog', () => {
       return { id: 'run-edited', status: 'awaiting_review' }
     })
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn((listener) => {
           onGenerationDelta = listener
@@ -381,6 +465,7 @@ describe('GenerateReportDialog', () => {
     })
     const readDraft = vi.fn().mockResolvedValue('# 可用草稿')
     vi.stubGlobal('electronAPI', {
+      projects: { state: vi.fn().mockResolvedValue({ projects: [defaultProject] }) },
       runs: {
         onGenerationDelta: vi.fn((listener) => {
           onGenerationDelta = listener

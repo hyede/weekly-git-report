@@ -242,6 +242,7 @@ export const ReportRunSchema = z
     templateRevision: z.string().optional(),
     draftPath: z.string().optional(),
     summaryPath: z.string().optional(),
+    warnings: z.array(z.string()).optional(),
     error: ReportRunErrorSchema.optional(),
     steps: z.array(ReportRunStepSchema),
     createdAt: z.string().datetime(),

@@ -494,6 +494,17 @@ export async function runDesktopTask(
   if (!task) throw new Error(`任务不存在：${id}`);
   if (trigger === "scheduled" && !task.enabled) throw new Error("定时任务已停用。 ");
   await assertTaskAutomationReady(task);
+  if (task.projectIds.length > 0) {
+    const configured = (await loadProjectsIndex()).projects;
+    const availableIds = new Set(
+      configured
+        .filter((project) => project.enabled && task.projectIds.includes(project.id))
+        .map((project) => project.id),
+    );
+    if (!task.projectIds.some((projectId) => availableIds.has(projectId))) {
+      throw new Error("任务所选仓库均已停用或不存在，无法生成报告。");
+    }
+  }
   const prepared = await prepareReportRun({
     reportType: task.cadence,
     period:
@@ -539,6 +550,9 @@ export async function generateDesktopReport(
   if (!ai) throw new Error("请先配置 AI 服务，再生成报告。");
   const enabledProjects = (await loadProjectsIndex()).projects.filter((project) => project.enabled);
   if (enabledProjects.length === 0) throw new Error("请先添加并启用至少一个仓库。");
+  if (request.projectIds !== undefined && request.projectIds.length === 0) {
+    throw new Error("至少选择一个已启用的仓库。");
+  }
   const prepared = await prepareReportRun({
     reportType: request.reportType,
     ...(request.templateType ? { templateType: request.templateType } : {}),
