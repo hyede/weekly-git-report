@@ -1,0 +1,53 @@
+name: 手动打包
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_ref:
+        description: 要打包的分支名或 Tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.package_ref }}
+      - uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: artifact
+        name: 生成 Artifact 名称
+        shell: pwsh
+        env:
+          PACKAGE_REF: ${{ inputs.package_ref }}
+        run: |
+          $safeRef = $env:PACKAGE_REF -replace '[^A-Za-z0-9._-]', '-'
+          $version = node -p "require('./apps/desktop/package.json').version"
+          "name=desktop-$safeRef-v$version-${{ github.run_number }}-windows-x64" >> $env:GITHUB_OUTPUT
+      - name: 构建全仓产物
+        run: pnpm run build
+      - name: 构建 Windows x64 安装包
+        run: pnpm --filter @weekly-git-report/desktop exec electron-builder --win --x64 --publish never
+      - name: 上传安装包 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest.yml
